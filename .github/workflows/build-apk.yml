@@ -1,0 +1,108 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        run: |
+          set -e
+
+          ZIP_FILE="bab-ul-ilm-ready-to-use.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found"
+            exit 1
+          fi
+
+          rm -rf .build
+          mkdir -p .build
+
+          unzip -q "$ZIP_FILE" -d .build
+
+          echo "ZIP extracted successfully."
+
+      - name: Find project directory
+        run: |
+          set -e
+
+          PROJECT_DIR=""
+
+          echo "Searching for package.json..."
+
+          while IFS= read -r file; do
+            DIR="$(dirname "$file")"
+
+            if [ -f "$DIR/package.json" ]; then
+              PROJECT_DIR="$DIR"
+
+              if grep -q '"apps/web"' "$DIR/package.json"; then
+                break
+              fi
+            fi
+          done < <(find .build -name package.json -type f)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: package.json not found inside ZIP."
+            echo "Files found:"
+            find .build -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          npm install --no-audit --no-fund
+
+      - name: Build web app
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          npm run build --workspace apps/web
+
+      - name: Setup Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bab-Ul-Ilm-debug-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
